@@ -15,7 +15,6 @@ Detects how many people sit at each table of a study room from an overhead camer
 | File | What it is |
 |------|------------|
 | `main_program.py` | The detection program |
-| `utils.py` | Helper functions |
 | `images/` | Photos we use to test the project, and result screenshots |
 | `requirements.txt` | Libraries to install |
 
@@ -58,9 +57,11 @@ Press any key to close the result window.
 ## Example result
 
 Green dots are detected people, and red rectangles are the table zones.
+<img width="363" height="115" alt="Screenshot 2026-11-19 143942" src="https://github.com/user-attachments/assets/61f5df92-a420-4892-a0d9-bb13cd5e06be" />
+<img width="1213" height="919" alt="Screenshot 2026-11-19 143953" src="https://github.com/user-attachments/assets/a432b30f-b960-4954-97a5-f72f0bd507d0" />
 
-![Detection result](images/result.png)
+
 
 The terminal prints how many people are at each table:
 
-![Terminal output](images/terminal.png)
+
