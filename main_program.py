@@ -2,7 +2,7 @@ import cv2
 from ultralytics import YOLO
 
 model = YOLO("yolo11l.pt")
-img = cv2.imread(r"C:\Users\20109\Downloads\Gemini_Generated_Image_dl0pyhdl0pyhdl0p.jpg")
+img = cv2.imread("./images/1.jpg")
 if img is None:
     raise FileNotFoundError("Image not found!")
 
