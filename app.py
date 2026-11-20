@@ -564,6 +564,20 @@ def display_demo_notice():
 # STUDY-AREA MAP (schematic, table level)
 # ==========================================
 
+# ROOM IMAGE
+st.markdown("### Room Overview")
+
+ROOM_IMAGE = Path(__file__).parent / "room.jpg.jpeg"
+
+if ROOM_IMAGE.exists():
+    st.image(
+        str(ROOM_IMAGE),
+        width=600
+    )
+else:
+    st.warning("Room image not found. Please check the image filename.")
+
+
 def display_table_map(selected_table=None):
     """Draw the room: each table shows how many people were detected out
     of its capacity, as a number and a row of dots.
@@ -857,6 +871,7 @@ display_problems()
 # ==========================================
 
 if page == "Overview":
+ 
 
     st.markdown("## Occupancy Overview")
 
