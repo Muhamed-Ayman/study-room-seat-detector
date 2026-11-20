@@ -1,4 +1,7 @@
 
+
+import base64
+import io
 import re
 import time
 from collections import Counter
@@ -14,8 +17,9 @@ try:
 except ImportError:
     smartseat_db = None
 
-
+# ==========================================
 # PAGE SETUP
+# ==========================================
 
 st.set_page_config(
     page_title="SmartSeat | University of Debrecen",
@@ -33,20 +37,20 @@ if css_path.exists():
             unsafe_allow_html=True
         )
 
-
+# ==========================================
 # SYSTEM CONFIGURATION
-
+# ==========================================
 
 # Defaults, used only while the database returns no snapshot.
-DATA_SOURCE = "demo"
+DATA_SOURCE = "demo"            # "demo", "replay" or "live"
 CAMERA_CONNECTED = False
 DETECTION_STATUS = "Awaiting integration"
-LAST_DETECTION_UPDATE = None
+LAST_DETECTION_UPDATE = None    # a datetime once real data is loaded
 
-
+# Live data older than this many seconds is shown as STALE.
 STALE_AFTER_SECONDS = 120
 
-
+# Find Available Seats looks this many minutes either side of the time.
 AVAILABILITY_WINDOW_MINUTES = 15
 
 OPENING_TIME = None
@@ -63,20 +67,31 @@ DEFAULT_TABLE_DATA = {
     "Table 07": 1,
     "Table 08": 1
 }
+
+
 TABLE_CAPACITY = {name: 4 for name in DEFAULT_TABLE_DATA}
+
 TABLE_LAYOUT = {
-    "Table 01": (4, 5),      # top row, left column
-    "Table 02": (39, 5),     # top row, middle column
-    "Table 03": (4, 36),     # middle row
-    "Table 04": (39, 36),
-    "Table 05": (74, 36),
-    "Table 06": (4, 67),     # bottom row
-    "Table 07": (39, 67),
-    "Table 08": (74, 67)
+    "Table 01": (3, 5),      # top row, left column
+    "Table 02": (37, 5),     # top row, middle column
+    "Table 03": (3, 36),     # middle row
+    "Table 04": (37, 36),
+    "Table 05": (71, 36),
+    "Table 06": (3, 67),     # bottom row
+    "Table 07": (37, 67),
+    "Table 08": (71, 67)
 }
 
-TABLE_BOX_WIDTH = 22
+TABLE_BOX_WIDTH = 26         # width of each table box, % of the room box
 
+
+MAP_HEIGHT = 460
+
+ROOM_IMAGE_NAMES = (
+    "room.jpg", "room.jpeg", "room.png", "room.jpg.jpeg"
+)
+
+# Colours (University of Debrecen palette plus status colours)
 DEEP_GREEN = "#103725"
 GREEN = "#174b35"
 SOFT_GREEN = "#e8f1e9"
@@ -88,7 +103,7 @@ GOLD = "#c6a45b"
 MUTED = "#55655b"
 LINE = "#e2ded4"
 
-
+# Table states: (background, strong colour, label)
 STATE_STYLE = {
     "available": (SOFT_GREEN, GREEN, "AVAILABLE"),
     "partial": (SOFT_AMBER, AMBER, "PARTLY OCCUPIED"),
@@ -107,6 +122,9 @@ DATA_MODE_TEXT = {
     "live": "Live detections"
 }
 
+# ==========================================
+# ADDITIONAL DASHBOARD STYLES
+# ==========================================
 
 st.markdown("""
 <style>
@@ -169,7 +187,7 @@ st.markdown("""
 if "table_data" not in st.session_state:
     st.session_state.table_data = dict(DEFAULT_TABLE_DATA)
 else:
-
+    # Keep any saved sample data aligned with the configured tables.
     st.session_state.table_data = {
         name: st.session_state.table_data.get(name, default)
         for name, default in DEFAULT_TABLE_DATA.items()
@@ -177,7 +195,6 @@ else:
 
 # Messages about the data, shown at the top of the page.
 data_problems = []
-
 
 
 
@@ -199,7 +216,8 @@ def to_local_naive(value):
 
 
 def canonical_table_name(name):
-
+    """Make table names match: 'Table 1', 'table 01' and 'T1' all become
+    'Table 01', the name used by this dashboard."""
     match = re.search(r"(\d+)", str(name))
 
     if match is None:
@@ -230,14 +248,7 @@ def load_latest_snapshot():
 
 
 def load_history():
-    """INTEGRATION POINT 2: one reading per stored snapshot, for the chart.
 
-    Calls smartseat_db.history_totals(). It must return a list of
-    dictionaries (oldest first):
-        {"time": datetime or ISO text, "source": "live" or "replay",
-         "people_detected": 17}
-    Returns (rows, problem_text_or_None).
-    """
     if smartseat_db is None:
         return [], None
 
@@ -253,25 +264,7 @@ def load_history():
 
 
 def load_availability(weekday, visit_time, seats_needed):
-    """INTEGRATION POINT 3: the availability forecast.
-
-    Calls smartseat_db.predict_availability(weekday, visit_time,
-    seats_needed, window_minutes), where
-        weekday      0 = Monday ... 6 = Sunday (Python's date.weekday())
-        visit_time   a datetime.time
-        seats_needed free seats wanted together at ONE table
-        window_minutes  look this far either side of visit_time
-    It returns a dictionary (or just the probability number):
-        {"probability": 0.62 or None, "readings_used": 14,
-         "days_covered": 5, "source": "live"/"replay"/"demo"}
-    probability is between 0 and 1. None means not enough history.
-    Meaning: the share of past snapshots, on that weekday within the time
-    window, where at least one table had `seats_needed` free seats
-    (rated capacity minus people detected).
-
-    This function always returns a dictionary with a "status":
-    ok, not_enough_data, not_connected or error.
-    """
+    
     function = (
         getattr(smartseat_db, "predict_availability", None)
         if smartseat_db is not None else None
@@ -564,20 +557,6 @@ def display_demo_notice():
 # STUDY-AREA MAP (schematic, table level)
 # ==========================================
 
-# ROOM IMAGE
-st.markdown("### Room Overview")
-
-ROOM_IMAGE = Path(__file__).parent / "room.jpg.jpeg"
-
-if ROOM_IMAGE.exists():
-    st.image(
-        str(ROOM_IMAGE),
-        width=600
-    )
-else:
-    st.warning("Room image not found. Please check the image filename.")
-
-
 def display_table_map(selected_table=None):
     """Draw the room: each table shows how many people were detected out
     of its capacity, as a number and a row of dots.
@@ -625,19 +604,129 @@ def display_table_map(selected_table=None):
                 {count} / {capacity}
             </div>
             <div style="display:flex;gap:5px;">{dots}</div>
-            <div style="font-size:11px;font-weight:700;color:{colour};">
+            <div style="font-size:11px;font-weight:700;color:{colour};
+                        text-align:center;padding:0 4px;">
                 {label}
             </div>
         </div>
         """
 
     st.html(f"""
-    <div style="position:relative;height:460px;background:#faf8f4;
+    <div style="position:relative;height:{MAP_HEIGHT}px;background:#faf8f4;
                 border:1px solid {LINE};border-radius:12px;
                 overflow:hidden;">
         {boxes}
     </div>
     """)
+
+
+# ==========================================
+# ROOM PHOTO (Overview page only)
+# ==========================================
+
+def find_room_image():
+    """First room photo found next to app.py or in assets/, else None."""
+    base = Path(__file__).parent
+
+    for folder in (base, base / "assets"):
+        for filename in ROOM_IMAGE_NAMES:
+            candidate = folder / filename
+            if candidate.exists():
+                return candidate
+
+    return None
+
+
+@st.cache_data(show_spinner="Running YOLO on the room photo...")
+def run_yolo_on_photo(path_text, modified_time):
+    """OPTIONAL: draw the team's YOLO detections on the room photo.
+
+    Uses the team's own module: processing.process_image(image) must return
+    (annotated_image_in_BGR, details). The imports are inside the function,
+    so the dashboard starts normally when OpenCV or the module is missing.
+    modified_time only makes the cache refresh when the photo changes.
+    """
+    import cv2
+    import processing
+
+    image = cv2.imread(path_text)
+
+    if image is None:
+        raise ValueError("The room photo could not be read.")
+
+    annotated, details = processing.process_image(image)
+
+    return cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), details
+
+
+def to_data_uri(picture):
+    """Shrink a PIL picture and return it as text a web page can show."""
+    picture = picture.convert("RGB")
+    picture.thumbnail((1100, 1100))
+
+    buffer = io.BytesIO()
+    picture.save(buffer, format="JPEG", quality=85)
+
+    encoded = base64.b64encode(buffer.getvalue()).decode()
+    return "data:image/jpeg;base64," + encoded
+
+
+@st.cache_data(show_spinner=False)
+def plain_photo_uri(path_text, modified_time):
+    from PIL import Image
+    return to_data_uri(Image.open(path_text))
+
+
+@st.cache_data(show_spinner=False)
+def yolo_photo_uri(path_text, modified_time):
+    from PIL import Image
+    annotated, _details = run_yolo_on_photo(path_text, modified_time)
+    return to_data_uri(Image.fromarray(annotated))
+
+
+def display_room_overview():
+    """The room photo, MAP_HEIGHT pixels tall so it lines up with the map.
+
+    Shows the YOLO detections if the team's module is available, and the
+    plain photo otherwise.
+    """
+    photo = find_room_image()
+
+    if photo is None:
+        st.warning(
+            "Room photo not found. Put room.jpg next to app.py "
+            "(or in the assets folder)."
+        )
+        return
+
+    stamp = photo.stat().st_mtime
+    caption = "Study room (photo)"
+    problem = None
+    uri = None
+
+    try:
+        uri = yolo_photo_uri(str(photo), stamp)
+        caption = "Study room with YOLO detections"
+    except ImportError:
+        pass    # no YOLO module here: show the plain photo
+    except Exception as error:
+        problem = (
+            "YOLO detection could not run, so the plain photo is "
+            f"shown: {error}"
+        )
+
+    if uri is None:
+        uri = plain_photo_uri(str(photo), stamp)
+
+    st.html(
+        f'<img src="{uri}" alt="Study room" '
+        f'style="display:block;width:100%;height:{MAP_HEIGHT}px;'
+        f'object-fit:cover;border-radius:12px;border:1px solid {LINE};">'
+    )
+    st.caption(caption)
+
+    if problem:
+        st.warning(problem)
 
 
 # ==========================================
@@ -871,7 +960,6 @@ display_problems()
 # ==========================================
 
 if page == "Overview":
- 
 
     st.markdown("## Occupancy Overview")
 
@@ -907,16 +995,9 @@ if page == "Overview":
 
     st.markdown("---")
 
-    map_column, status_column = st.columns([2, 1])
+    picker_column, _spacer = st.columns([1, 2])
 
-    with map_column:
-
-        st.markdown("### Occupancy Monitor")
-
-        st.caption(
-            "Each table shows the people detected out of its seats. "
-            "Dots are a count: they do not show which chair is taken."
-        )
+    with picker_column:
 
         selected_table = st.selectbox(
             "Select a table to inspect",
@@ -924,11 +1005,29 @@ if page == "Overview":
             key="overview_selected_table"
         )
 
+    photo_column, map_column = st.columns(2)
+
+    with photo_column:
+
+        st.markdown("### Room Overview")
+
+        display_room_overview()
+
+    with map_column:
+
+        st.markdown("### Occupancy Monitor")
+
         display_table_map(selected_table)
+
+        st.caption(
+            "Schematic layout based on the room photo, not to scale. "
+            "Each table shows the people detected out of its seats. "
+            "Dots are a count: they do not show which chair is taken."
+        )
 
         st.html(
             '<div style="display:flex;gap:8px;flex-wrap:wrap;'
-            'margin:10px 0;">'
+            'margin:6px 0;">'
             + status_badge("AVAILABLE: nobody detected", "available")
             + status_badge("PARTLY OCCUPIED", "partial")
             + status_badge("FULL: all seats counted", "full")
@@ -936,15 +1035,13 @@ if page == "Overview":
             + "</div>"
         )
 
-        st.caption(
-            "Schematic layout based on the room photo, not to scale."
-        )
+    details_column, status_column = st.columns(2)
 
-    with status_column:
+    selected_count = table_data[selected_table]
+    selected_capacity = TABLE_CAPACITY[selected_table]
+    free_seats = max(selected_capacity - selected_count, 0)
 
-        selected_count = table_data[selected_table]
-        selected_capacity = TABLE_CAPACITY[selected_table]
-        free_seats = max(selected_capacity - selected_count, 0)
+    with details_column:
 
         st.markdown("### Table Details")
 
@@ -960,6 +1057,8 @@ if page == "Overview":
             "Free seats = rated capacity minus people detected. "
             "It is an estimate, not chair-by-chair detection."
         )
+
+    with status_column:
 
         st.markdown("### Detection Status")
 
@@ -1356,7 +1455,7 @@ st.html(
     """
 )
 
-
+# Reload every 10 seconds so new detections appear without clicking.
 if auto_refresh:
     time.sleep(10)
     st.rerun()
