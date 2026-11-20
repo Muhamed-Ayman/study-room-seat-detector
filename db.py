@@ -150,42 +150,32 @@ def get_history(limit=50):
 
 
 def get_latest_tables():
-    """The newest reading with its per-table details, for the dashboard cards.
+    """The newest table reading, taken from table_readings, for the cards.
 
     Returns {"taken_at": ..., "availability_percent": ...,
-             "tables": [{"table": 1, "people": 2, "seats": 4, "free": 2}, ...]}
-    or None if there are no readings yet. "tables" is an empty list if the
-    newest reading was saved without table details.
-    Only "free" is stored; "seats" is 4 and "people" = seats - free.
+             "tables": [{"table": 1, "free": 2}, {"table": 2, "free": 4}, ...]}
+    or None if no table readings are stored yet.
+    Only the number of FREE SEATS of each table is returned (the only thing
+    table_readings stores). Readings saved without table details are skipped.
     """
     init_db()
     with _connect() as db:
         row = db.execute(
-            "SELECT id, taken_at, availability_percent FROM readings"
-            " ORDER BY taken_at DESC, id DESC LIMIT 1"
+            f"SELECT r.taken_at, r.availability_percent,"
+            f" {', '.join('t.' + c for c in TABLE_COLUMNS)}"
+            " FROM table_readings t JOIN readings r ON r.id = t.reading_id"
+            " ORDER BY r.taken_at DESC, t.reading_id DESC LIMIT 1"
         ).fetchone()
-        if row is None:
-            return None
-        reading_id, taken_at, percent = row
-        free_row = db.execute(
-            f"SELECT {', '.join(TABLE_COLUMNS)} FROM table_readings"
-            " WHERE reading_id = ?",
-            (reading_id,),
-        ).fetchone()
+    if row is None:
+        return None
 
-    tables = []
-    if free_row:
-        for number, free in enumerate(free_row, start=1):
-            if free is not None:
-                tables.append({"table": number,
-                               "people": SEATS_PER_TABLE - free,
-                               "seats": SEATS_PER_TABLE,
-                               "free": free})
-
+    taken_at, percent, *free_seats = row
     return {
         "taken_at": taken_at,
         "availability_percent": percent,
-        "tables": tables,
+        "tables": [{"table": number, "free": free}
+                   for number, free in enumerate(free_seats, start=1)
+                   if free is not None],
     }
 
 
