@@ -4,10 +4,11 @@ Contract (agreed by the team):
     init_db()                         create the table
     save_reading(percent)             insert one row (time = now)
     get_history(limit=50)             latest rows, oldest first (for the chart)
+    get_latest_tables()               newest reading + per-table details (cards)
     predict_availability(date_time)   (average_percent, samples) for the planner
 
 Table:  readings(id, taken_at, availability_percent)
-Only the room availability percent is stored. No images, no faces.
+Stores the room percent plus per-table counts. No images, no faces.
 """
 
 import sqlite3
@@ -28,6 +29,7 @@ def _connect():
     connection = sqlite3.connect(DB_PATH, timeout=10)
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA busy_timeout=10000")
+    connection.execute("PRAGMA foreign_keys=ON")
     return connection
 
 
@@ -53,12 +55,28 @@ def init_db():
         db.execute(
             "CREATE INDEX IF NOT EXISTS idx_readings_taken_at ON readings (taken_at)"
         )
+        # Per-table details of each reading (so no JSON file is needed).
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS table_readings (
+                reading_id   INTEGER NOT NULL
+                             REFERENCES readings(id) ON DELETE CASCADE,
+                table_number INTEGER NOT NULL,
+                people       INTEGER NOT NULL,
+                seats        INTEGER NOT NULL,
+                free         INTEGER NOT NULL,
+                PRIMARY KEY (reading_id, table_number)
+            )
+            """
+        )
 
 
-def save_reading(availability_percent, taken_at=None):
-    """Insert one reading. The time is added here, so callers only send the percent.
+def save_reading(availability_percent, tables=None, taken_at=None):
+    """Insert one reading. The time is added here.
 
     availability_percent  0..100 for the whole room
+    tables                optional: details["tables"] from process_image(), i.e.
+                          [{"table": 1, "people": 2, "seats": 4, "free": 2}, ...]
     taken_at              optional datetime (or ISO string); default = right now
     Returns the id of the new row.
     """
@@ -74,7 +92,16 @@ def save_reading(availability_percent, taken_at=None):
             "INSERT INTO readings (taken_at, availability_percent) VALUES (?, ?)",
             (_to_text(taken_at), percent),
         )
-        return cursor.lastrowid
+        reading_id = cursor.lastrowid
+        if tables:
+            db.executemany(
+                "INSERT INTO table_readings"
+                " (reading_id, table_number, people, seats, free)"
+                " VALUES (?, ?, ?, ?, ?)",
+                [(reading_id, int(t["table"]), int(t["people"]),
+                  int(t["seats"]), int(t["free"])) for t in tables],
+            )
+        return reading_id
 
 
 def get_history(limit=50):
@@ -95,6 +122,37 @@ def get_history(limit=50):
 
     rows.reverse()  # newest-first from SQL -> oldest-first for the chart
     return [{"taken_at": t, "availability_percent": p} for t, p in rows]
+
+
+def get_latest_tables():
+    """The newest reading with its per-table details, for the dashboard cards.
+
+    Returns {"taken_at": ..., "availability_percent": ...,
+             "tables": [{"table": 1, "people": 2, "seats": 4, "free": 2}, ...]}
+    or None if there are no readings yet. "tables" is an empty list if the
+    newest reading was saved without table details.
+    """
+    init_db()
+    with _connect() as db:
+        row = db.execute(
+            "SELECT id, taken_at, availability_percent FROM readings"
+            " ORDER BY taken_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        reading_id, taken_at, percent = row
+        tables = db.execute(
+            "SELECT table_number, people, seats, free FROM table_readings"
+            " WHERE reading_id = ? ORDER BY table_number",
+            (reading_id,),
+        ).fetchall()
+
+    return {
+        "taken_at": taken_at,
+        "availability_percent": percent,
+        "tables": [{"table": n, "people": p, "seats": se, "free": f}
+                   for n, p, se, f in tables],
+    }
 
 
 def predict_availability(date_time):
