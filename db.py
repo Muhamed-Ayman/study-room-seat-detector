@@ -1,25 +1,18 @@
-
 """db.py - the ONLY file that touches SQL (Person 2).
 
 Contract (agreed by the team):
-    init_db()                         create the tables
+    init_db()                         create the table
     save_reading(percent)             insert one row (time = now)
     get_history(limit=50)             latest rows, oldest first (for the chart)
-    get_latest_tables()               newest reading + per-table people counts
+    get_latest_tables()               newest reading + per-table details (cards)
     predict_availability(date_time)   (average_percent, samples) for the planner
 
 Tables:
     readings(id, taken_at, availability_percent)
+    table_readings(reading_id, table_1, table_2, ... table_8)
 
-    table_readings(
-        reading_id,
-        table_1, table_2, table_3, table_4,
-        table_5, table_6, table_7, table_8
-    )
-
-Each table column stores ONLY the number of people detected.
-No free-seat calculations or additional occupancy data.
-No images, no faces.
+table_readings has ONE ROW PER READING and ONE COLUMN PER TABLE. Each column
+holds only the number of FREE SEATS at that table. No images, no faces.
 """
 
 import sqlite3
@@ -29,15 +22,13 @@ from pathlib import Path
 # data/seats.db next to this file; the folder is created automatically.
 DB_PATH = Path(__file__).parent / "data" / "seats.db"
 
-NUM_TABLES = 8
-SEATS_PER_TABLE = 4
-TABLE_NUMBERS = range(1, NUM_TABLES + 1)
-
-TABLE_COLS = [f"table_{n}" for n in TABLE_NUMBERS]
-
 # predict_availability looks at readings within +/- this many minutes of the
 # chosen time of day, on the same weekday.
 WINDOW_MINUTES = 60
+
+NUM_TABLES = 8
+SEATS_PER_TABLE = 4          # every table has 4 seats
+TABLE_COLUMNS = [f"table_{i}" for i in range(1, NUM_TABLES + 1)]
 
 
 def _connect():
@@ -58,103 +49,41 @@ def _to_text(moment):
 
 
 def init_db():
-    """Create the database tables. Safe to call multiple times."""
+    """Create the readings table if it does not exist. Safe to call many times.
 
+    If an OLD table_readings (one row per table) is found, it is replaced by
+    the new 8-column layout; its per-table details are dropped.
+    """
+    columns = ",\n                ".join(
+        f"{name} INTEGER CHECK ({name} BETWEEN 0 AND {SEATS_PER_TABLE})"
+        for name in TABLE_COLUMNS
+    )
     with _connect() as db:
-
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS readings (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-                taken_at             TEXT NOT NULL,
-                availability_percent REAL NOT NULL
+                taken_at             TEXT NOT NULL,  -- local time, 'YYYY-MM-DD HH:MM:SS'
+                availability_percent REAL NOT NULL   -- 0..100, free seats / total seats
             )
             """
         )
-
         db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_readings_taken_at "
-            "ON readings (taken_at)"
+            "CREATE INDEX IF NOT EXISTS idx_readings_taken_at ON readings (taken_at)"
         )
 
-        required_columns = ["reading_id"] + TABLE_COLS
+        # Old layout (table_number/people/seats/free columns) -> remove it.
+        have = [r[1] for r in db.execute("PRAGMA table_info(table_readings)")]
+        if have and "table_1" not in have:
+            db.execute("DROP TABLE table_readings")
 
-        # Check whether table_readings already exists.
-        existing_columns = [
-            row[1]
-            for row in db.execute(
-                "PRAGMA table_info(table_readings)"
-            )
-        ]
-
-        # Migrate the previous per-table structure if necessary.
-        if existing_columns and existing_columns != required_columns:
-
-            db.execute(
-                "ALTER TABLE table_readings "
-                "RENAME TO table_readings_old"
-            )
-
-            db.execute(
-                """
-                CREATE TABLE table_readings (
-                    reading_id INTEGER PRIMARY KEY
-                        REFERENCES readings(id) ON DELETE CASCADE,
-
-                    table_1 INTEGER NOT NULL DEFAULT 0,
-                    table_2 INTEGER NOT NULL DEFAULT 0,
-                    table_3 INTEGER NOT NULL DEFAULT 0,
-                    table_4 INTEGER NOT NULL DEFAULT 0,
-                    table_5 INTEGER NOT NULL DEFAULT 0,
-                    table_6 INTEGER NOT NULL DEFAULT 0,
-                    table_7 INTEGER NOT NULL DEFAULT 0,
-                    table_8 INTEGER NOT NULL DEFAULT 0
-                )
-                """
-            )
-
-            # Preserve existing people counts from the old structure.
-            if "table_number" in existing_columns and "people" in existing_columns:
-
-                db.execute(
-                    """
-                    INSERT INTO table_readings (
-                        reading_id,
-                        table_1, table_2, table_3, table_4,
-                        table_5, table_6, table_7, table_8
-                    )
-                    SELECT
-                        reading_id,
-                        COALESCE(MAX(CASE WHEN table_number = 1 THEN people END), 0),
-                        COALESCE(MAX(CASE WHEN table_number = 2 THEN people END), 0),
-                        COALESCE(MAX(CASE WHEN table_number = 3 THEN people END), 0),
-                        COALESCE(MAX(CASE WHEN table_number = 4 THEN people END), 0),
-                        COALESCE(MAX(CASE WHEN table_number = 5 THEN people END), 0),
-                        COALESCE(MAX(CASE WHEN table_number = 6 THEN people END), 0),
-                        COALESCE(MAX(CASE WHEN table_number = 7 THEN people END), 0),
-                        COALESCE(MAX(CASE WHEN table_number = 8 THEN people END), 0)
-                    FROM table_readings_old
-                    GROUP BY reading_id
-                    """
-                )
-
-            db.execute("DROP TABLE table_readings_old")
-
-        # Create the new structure if it does not exist.
+        # Free seats of each table for one reading: one column per table.
         db.execute(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS table_readings (
                 reading_id INTEGER PRIMARY KEY
-                    REFERENCES readings(id) ON DELETE CASCADE,
-
-                table_1 INTEGER NOT NULL DEFAULT 0,
-                table_2 INTEGER NOT NULL DEFAULT 0,
-                table_3 INTEGER NOT NULL DEFAULT 0,
-                table_4 INTEGER NOT NULL DEFAULT 0,
-                table_5 INTEGER NOT NULL DEFAULT 0,
-                table_6 INTEGER NOT NULL DEFAULT 0,
-                table_7 INTEGER NOT NULL DEFAULT 0,
-                table_8 INTEGER NOT NULL DEFAULT 0
+                           REFERENCES readings(id) ON DELETE CASCADE,
+                {columns}
             )
             """
         )
@@ -164,71 +93,39 @@ def save_reading(availability_percent, tables=None, taken_at=None):
     """Insert one reading. The time is added here.
 
     availability_percent  0..100 for the whole room
-
     tables                optional: details["tables"] from process_image(), i.e.
-                          [{"table": 1, "people": 2}, ...]
-
+                          [{"table": 1, "people": 2, "seats": 4, "free": 2}, ...]
+                          Only "table" and "free" are stored: "free" goes into
+                          the column of that table.
     taken_at              optional datetime (or ISO string); default = right now
-
     Returns the id of the new row.
     """
-
     if taken_at is None:
         taken_at = datetime.now()
-
     percent = float(availability_percent)
-
     if not 0 <= percent <= 100:
-        raise ValueError(
-            f"availability_percent must be 0..100, got {percent}"
-        )
-
-    # Initialize all 8 tables with zero people.
-    people = {n: 0 for n in TABLE_NUMBERS}
-
-    if tables:
-        for table in tables:
-
-            number = int(table["table"])
-
-            if number in people:
-                people[number] = max(
-                    0,
-                    min(SEATS_PER_TABLE, int(table["people"]))
-                )
-
-    # Arrange people counts in table order.
-    values = [people[n] for n in TABLE_NUMBERS]
+        raise ValueError(f"availability_percent must be 0..100, got {percent}")
 
     init_db()
-
     with _connect() as db:
-
         cursor = db.execute(
-            """
-            INSERT INTO readings
-                (taken_at, availability_percent)
-            VALUES (?, ?)
-            """,
+            "INSERT INTO readings (taken_at, availability_percent) VALUES (?, ?)",
             (_to_text(taken_at), percent),
         )
-
         reading_id = cursor.lastrowid
-
-        # Store all 8 people counts in ONE row.
-        columns = ["reading_id"] + TABLE_COLS
-
-        placeholders = ", ".join("?" for _ in columns)
-
-        db.execute(
-            f"""
-            INSERT INTO table_readings
-                ({', '.join(columns)})
-            VALUES ({placeholders})
-            """,
-            [reading_id] + values,
-        )
-
+        if tables:
+            free = {}
+            for t in tables:
+                number = int(t["table"])
+                if 1 <= number <= NUM_TABLES:
+                    free[f"table_{number}"] = max(0, min(SEATS_PER_TABLE,
+                                                         int(t["free"])))
+            if free:
+                db.execute(
+                    f"INSERT INTO table_readings (reading_id, {', '.join(free)})"
+                    f" VALUES (?, {', '.join('?' * len(free))})",
+                    (reading_id, *free.values()),
+                )
         return reading_id
 
 
@@ -236,95 +133,59 @@ def get_history(limit=50):
     """The latest `limit` readings, OLDEST FIRST so a chart reads left to right.
 
     Returns a list of dicts:
-        [{"taken_at": "2026-11-20 14:00:00",
-          "availability_percent": 62.5}, ...]
-
+        [{"taken_at": "2026-11-20 14:00:00", "availability_percent": 62.5}, ...]
     Empty list if there is no data yet.
-    Easy to use: pd.DataFrame(db.get_history())
+    Easy to use:  pd.DataFrame(db.get_history())
     """
-
     init_db()
-
     with _connect() as db:
-
         rows = db.execute(
-            """
-            SELECT taken_at, availability_percent
-            FROM readings
-            ORDER BY taken_at DESC, id DESC
-            LIMIT ?
-            """,
+            "SELECT taken_at, availability_percent FROM readings"
+            " ORDER BY taken_at DESC, id DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
 
-    rows.reverse()
-
-    return [
-        {
-            "taken_at": taken_at,
-            "availability_percent": percent
-        }
-        for taken_at, percent in rows
-    ]
+    rows.reverse()  # newest-first from SQL -> oldest-first for the chart
+    return [{"taken_at": t, "availability_percent": p} for t, p in rows]
 
 
 def get_latest_tables():
-    """The newest reading with its per-table people counts.
+    """The newest reading with its per-table details, for the dashboard cards.
 
-    Returns:
-        {
-            "taken_at": "...",
-            "availability_percent": 62.5,
-            "tables": [
-                {"table": 1, "people": 2},
-                {"table": 2, "people": 1},
-                ...
-            ]
-        }
-
-    Returns None if there are no readings.
+    Returns {"taken_at": ..., "availability_percent": ...,
+             "tables": [{"table": 1, "people": 2, "seats": 4, "free": 2}, ...]}
+    or None if there are no readings yet. "tables" is an empty list if the
+    newest reading was saved without table details.
+    Only "free" is stored; "seats" is 4 and "people" = seats - free.
     """
-
     init_db()
-
     with _connect() as db:
-
         row = db.execute(
-            f"""
-            SELECT
-                r.id,
-                r.taken_at,
-                r.availability_percent,
-                {', '.join('t.' + col for col in TABLE_COLS)}
-            FROM readings r
-            JOIN table_readings t
-                ON t.reading_id = r.id
-            ORDER BY r.taken_at DESC, r.id DESC
-            LIMIT 1
-            """
+            "SELECT id, taken_at, availability_percent FROM readings"
+            " ORDER BY taken_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        reading_id, taken_at, percent = row
+        free_row = db.execute(
+            f"SELECT {', '.join(TABLE_COLUMNS)} FROM table_readings"
+            " WHERE reading_id = ?",
+            (reading_id,),
         ).fetchone()
 
-    if row is None:
-        return None
-
-    reading_id, taken_at, percent = row[:3]
-
-    # The remaining 8 values represent people at each table.
-    people_values = row[3:11]
-
     tables = []
-
-    for index, number in enumerate(TABLE_NUMBERS):
-
-        tables.append({
-            "table": number,
-            "people": people_values[index]
-        })
+    if free_row:
+        for number, free in enumerate(free_row, start=1):
+            if free is not None:
+                tables.append({"table": number,
+                               "people": SEATS_PER_TABLE - free,
+                               "seats": SEATS_PER_TABLE,
+                               "free": free})
 
     return {
         "taken_at": taken_at,
         "availability_percent": percent,
-        "tables": tables
+        "tables": tables,
     }
 
 
@@ -335,96 +196,70 @@ def predict_availability(date_time):
     +/- WINDOW_MINUTES of date_time, and returns their average.
 
     Returns (average_percent, samples), for example (58.0, 6).
-    If nothing matches: (None, 0).
+    If nothing matches: (None, 0). The dashboard must handle None, and should
+    always show `samples` ("based on 6 past readings").
     """
-
     init_db()
-
     if isinstance(date_time, str):
         date_time = datetime.fromisoformat(date_time)
 
-    weekday = date_time.weekday()
-    target = date_time.hour * 60 + date_time.minute
+    weekday = date_time.weekday()                        # 0 = Monday ... 6 = Sunday
+    target = date_time.hour * 60 + date_time.minute      # minutes since midnight
 
     with _connect() as db:
-
         average, samples = db.execute(
             """
             SELECT AVG(availability_percent), COUNT(*)
             FROM readings
             WHERE (CAST(strftime('%w', taken_at) AS INTEGER) + 6) % 7 = ?
-              AND ABS(
-                    CAST(strftime('%H', taken_at) AS INTEGER) * 60
-                    + CAST(strftime('%M', taken_at) AS INTEGER) - ?
-                  ) <= ?
+              AND ABS(CAST(strftime('%H', taken_at) AS INTEGER) * 60
+                      + CAST(strftime('%M', taken_at) AS INTEGER) - ?) <= ?
             """,
             (weekday, target, WINDOW_MINUTES),
         ).fetchone()
 
     if not samples:
         return None, 0
-
     return round(average, 1), samples
 
 
 def seed_demo():
     """Insert INVENTED readings so Person 3 can test the planner and chart.
 
-    Clearly demo data: say so in the pitch.
-    Run with: python db.py --seed-demo
+    Clearly demo data: say so in the pitch. Run with:  python db.py --seed-demo
     """
-
     from datetime import timedelta
     import random
 
     init_db()
-
     rng = random.Random(42)
+    today = datetime.now().replace(minute=0, second=0, microsecond=0)
 
-    today = datetime.now().replace(
-        minute=0,
-        second=0,
-        microsecond=0
-    )
-
-    for days_back in range(1, 22):
-
+    for days_back in range(1, 22):                       # 3 weeks of history
         day = today - timedelta(days=days_back)
-
         weekend = day.weekday() >= 5
-
         for hour in range(8, 21):
-
-            busy = (
-                (1 - abs(hour - 13) / 7)
-                * (0.5 if weekend else 1.0)
-            )
-
+            busy = (1 - abs(hour - 13) / 7) * (0.5 if weekend else 1.0)
             for minute in (0, 30):
-
-                free = 100 - busy * 85 + rng.gauss(0, 8)
-
-                save_reading(
-                    max(0, min(100, free)),
-                    taken_at=day.replace(
-                        hour=hour,
-                        minute=minute
-                    )
-                )
+                tables = []
+                for number in range(1, NUM_TABLES + 1):
+                    free = round(SEATS_PER_TABLE * (1 - busy) + rng.gauss(0, 1))
+                    free = max(0, min(SEATS_PER_TABLE, free))
+                    tables.append({"table": number,
+                                   "people": SEATS_PER_TABLE - free,
+                                   "seats": SEATS_PER_TABLE, "free": free})
+                total_free = sum(t["free"] for t in tables)
+                percent = total_free / (NUM_TABLES * SEATS_PER_TABLE) * 100
+                save_reading(percent, tables=tables,
+                             taken_at=day.replace(hour=hour, minute=minute))
 
 
 if __name__ == "__main__":
-
     import sys
 
     init_db()
-
     if "--seed-demo" in sys.argv:
         seed_demo()
         print("Demo readings added.")
-
     print(f"Database ready: {DB_PATH}")
-
-    print(
-        f"Readings stored: {len(get_history(limit=10**9))}"
-    )
+    print(f"Readings stored: {len(get_history(limit=10**9))}")
