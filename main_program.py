@@ -1,6 +1,12 @@
 import cv2
 from ultralytics import YOLO
 
+import smartseat_db
+
+# Where these photos come from: "replay" = recorded photos,
+# "live" = a real camera stream. The dashboard labels data by this.
+DATA_SOURCE = "replay"
+
 model = YOLO("yolo11l.pt")
 img = cv2.imread("./images/1.jpg")
 if img is None:
@@ -82,6 +88,13 @@ cv2.imshow("Result", view)
 
 for i in range(1, 9):
     print(f"Total people detected on table {i}: {table_count[i]}")
+
+# Save this reading so the dashboard and the forecast can use it.
+smartseat_db.save_snapshot(
+    {f"Table {i}": table_count[i] for i in range(1, 9)},
+    source=DATA_SOURCE,
+)
+print("Saved to database.")
     
 cv2.waitKey(0)
 cv2.destroyAllWindows()
