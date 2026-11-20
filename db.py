@@ -2,7 +2,7 @@
 
 Contract (agreed by the team):
     init_db()                         create the table
-    save_reading(taken_at, percent)   insert one row
+    save_reading(percent)             insert one row (time = now)
     get_history(limit=50)             latest rows, oldest first (for the chart)
     predict_availability(date_time)   (average_percent, samples) for the planner
 
@@ -55,13 +55,15 @@ def init_db():
         )
 
 
-def save_reading(taken_at, availability_percent):
-    """Insert one reading.
+def save_reading(availability_percent, taken_at=None):
+    """Insert one reading. The time is added here, so callers only send the percent.
 
-    taken_at              datetime (or ISO string) of the photo
     availability_percent  0..100 for the whole room
+    taken_at              optional datetime (or ISO string); default = right now
     Returns the id of the new row.
     """
+    if taken_at is None:
+        taken_at = datetime.now()
     percent = float(availability_percent)
     if not 0 <= percent <= 100:
         raise ValueError(f"availability_percent must be 0..100, got {percent}")
@@ -148,8 +150,8 @@ def seed_demo():
             busy = (1 - abs(hour - 13) / 7) * (0.5 if weekend else 1.0)
             for minute in (0, 30):
                 free = 100 - busy * 85 + rng.gauss(0, 8)
-                save_reading(day.replace(hour=hour, minute=minute),
-                             max(0, min(100, free)))
+                save_reading(max(0, min(100, free)),
+                             taken_at=day.replace(hour=hour, minute=minute))
 
 
 if __name__ == "__main__":
