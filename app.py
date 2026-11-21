@@ -23,7 +23,7 @@ st.set_page_config(
     page_icon="🪑",
     layout="wide",
 )
-st_autorefresh(interval=2000, key="refresh")   # re-run the page every 2 s
+st_autorefresh(interval=1000, key="refresh")   # re-run the page every 2 s
 
 BASE = Path(__file__).parent
 IMAGE_PATH = BASE / "output" / "Latest_image.jpg"
