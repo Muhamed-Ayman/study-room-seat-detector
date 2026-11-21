@@ -178,26 +178,140 @@ def overview():
 
     st.caption(f"Last refresh: {time.strftime('%H:%M:%S')}")
 
-
 # ---------- page 2: planner ----------
 def planner():
+
     st.markdown("## Find Available Seats")
-    st.caption("A forecast from past readings, not a reservation.")
-    d_col, t_col = st.columns(2)
-    visit_date = d_col.date_input(
-        "Visit date", value=datetime.now().date() + timedelta(days=1))
-    visit_time = t_col.time_input("Arrival time", value=dtime(10, 0), step=900)
-    when = datetime.combine(visit_date, visit_time)
-    try:
-        percent, samples = db.predict_availability(when)
-        if not samples:
-            st.info("Not enough past readings for that day and time yet.")
+
+    st.caption(
+        "See the estimated availability at the time you plan to arrive. "
+        "This forecast uses past occupancy readings, not a reservation."
+    )
+
+    input_column, result_column = st.columns([1, 1.3])
+
+    with input_column:
+
+        st.markdown("### Your visit")
+
+        with st.form("find_seats_form"):
+
+            visit_date = st.date_input(
+                "Visit date",
+                value=datetime.now().date() + timedelta(days=1),
+                min_value=datetime.now().date()
+            )
+
+            visit_time = st.time_input(
+                "Arrival time",
+                value=dtime(10, 0),
+                step=900
+            )
+
+            submitted = st.form_submit_button(
+                "Check availability",
+                use_container_width=True
+            )
+
+        st.caption(
+            "SmartSeat does not reserve or hold seats. "
+            "Nothing is booked when you check availability."
+        )
+
+    if submitted:
+        st.session_state.seat_request = (visit_date, visit_time)
+
+    with result_column:
+
+        st.markdown("### Estimated availability")
+
+        request = st.session_state.get("seat_request")
+
+        if request is None:
+
+            st.info(
+                "Choose your visit date and arrival time, "
+                "then select Check availability."
+            )
+
         else:
-            st.success(f"Expected about {percent:.0f}% free "
-                       f"(based on {samples} past readings)")
-            st.caption("The history is demo data from the processed images.")
-    except Exception as error:
-        st.info(f"The forecast is not available yet ({error})")
+
+            selected_date, selected_time = request
+            when = datetime.combine(selected_date, selected_time)
+
+            st.markdown(
+                f"**Requested visit:** "
+                f"{selected_date.strftime('%d %B %Y')} "
+                f"at {selected_time.strftime('%H:%M')}"
+            )
+
+            if when < datetime.now():
+
+                st.warning("Please select a future date and time.")
+
+            else:
+
+                try:
+                    percent, samples = db.predict_availability(when)
+
+                    if samples is None or samples < 3:
+
+                        st.info(
+                            "Not enough historical readings to "
+                            "produce a reliable forecast yet."
+                        )
+
+                    elif percent is None or not 0 <= percent <= 100:
+
+                        st.warning(
+                            "The forecast returned an invalid result."
+                        )
+
+                    else:
+
+                        total_seats = CAPACITY * N_TABLES
+                        expected_free = round(
+                            (percent / 100) * total_seats
+                        )
+
+                        st.success(
+                            f"Estimated free-seat availability: "
+                            f"{percent:.0f}%"
+                        )
+
+                        st.metric(
+                            "Estimated free seats",
+                            f"About {expected_free} / {total_seats}"
+                        )
+
+                        st.caption(
+                            f"Based on {samples} historical readings."
+                        )
+
+                        st.progress(percent / 100)
+
+                        st.caption(
+                            "This represents the average share of "
+                            "free seats in the room, not the probability "
+                            "of finding a particular free table."
+                        )
+
+                except Exception as error:
+
+                    st.info(
+                        f"The forecast is currently unavailable: {error}"
+                    )
+
+    st.divider()
+
+    st.info(
+        "The forecast is based on historical occupancy readings. "
+        "It does not account for special events, examinations, "
+        "holidays or unexpected changes in occupancy. "
+        "SmartSeat does not guarantee or reserve seats."
+    )
+
+    st.caption("Current dashboard feed: replay of recorded images.")
 
 
 if page == "Overview":
