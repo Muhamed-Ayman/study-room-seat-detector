@@ -6,7 +6,7 @@ from pathlib import Path
 PROCESS_SCRIPT = "main_program.py"   # your YOLO / OpenCV file
 DASHBOARD = "app.py"         # the Streamlit file
 OUTPUT_DIR = Path("output")          # your output folder
-IMAGES_DIR = Path("D:\\images\\images")          # your images folder
+IMAGES_DIR = Path("images")          # your images folder
 DELAY_SECONDS = 1                    # pause between two images
 EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
