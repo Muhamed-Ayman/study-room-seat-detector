@@ -197,7 +197,7 @@ def predict_availability(date_time):
     always show `samples` ("based on 6 past readings").
     """
     init_db()
-    if isinstance(date_time, str):
+    if isinstance(date_time, str): 
         date_time = datetime.fromisoformat(date_time)
 
     weekday = date_time.weekday()                        # 0 = Monday ... 6 = Sunday
