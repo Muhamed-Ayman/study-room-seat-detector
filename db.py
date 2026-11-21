@@ -12,7 +12,7 @@ Tables:
     table_readings(reading_id, table_1, table_2, ... table_8)
 
 table_readings has ONE ROW PER READING and ONE COLUMN PER TABLE. Each column
-holds only the number of FREE SEATS at that table. No images, no faces.
+holds only the number of occupied  SEATS at that table. No images, no faces.
 """
 
 import sqlite3
@@ -64,7 +64,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS readings (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                 taken_at             TEXT NOT NULL,  -- local time, 'YYYY-MM-DD HH:MM:SS'
-                availability_percent REAL NOT NULL   -- 0..100, free seats / total seats
+                availability_percent REAL NOT NULL   -- 0..100, occupied  seats / total seats
             )
             """
         )
@@ -72,12 +72,12 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_readings_taken_at ON readings (taken_at)"
         )
 
-        # Old layout (table_number/people/seats/free columns) -> remove it.
+        # Old layout (table_number/people/seats/occupied  columns) -> remove it.
         have = [r[1] for r in db.execute("PRAGMA table_info(table_readings)")]
         if have and "table_1" not in have:
             db.execute("DROP TABLE table_readings")
 
-        # Free seats of each table for one reading: one column per table.
+        # occupied  seats of each table for one reading: one column per table.
         db.execute(
             f"""
             CREATE TABLE IF NOT EXISTS table_readings (
@@ -94,8 +94,8 @@ def save_reading(availability_percent, tables=None, taken_at=None):
 
     availability_percent  0..100 for the whole room
     tables                optional: details["tables"] from process_image(), i.e.
-                          [{"table": 1, "people": 2, "seats": 4, "free": 2}, ...]
-                          Only "table" and "free" are stored: "free" goes into
+                          [{"table": 1, "people": 2, "seats": 4, "occupied ": 2}, ...]
+                          Only "table" and "occupied " are stored: "occupied " goes into
                           the column of that table.
     taken_at              optional datetime (or ISO string); default = right now
     Returns the id of the new row.
@@ -114,17 +114,17 @@ def save_reading(availability_percent, tables=None, taken_at=None):
         )
         reading_id = cursor.lastrowid
         if tables:
-            free = {}
+            occupied     = {}
             for t in tables:
                 number = int(t["table"])
                 if 1 <= number <= NUM_TABLES:
-                    free[f"table_{number}"] = max(0, min(SEATS_PER_TABLE,
-                                                         int(t["free"])))
-            if free:
+                    occupied[f"table_{number}"] = max(0, min(SEATS_PER_TABLE,
+                                                         int(t["occupied"])))
+            if occupied:
                 db.execute(
-                    f"INSERT INTO table_readings (reading_id, {', '.join(free)})"
-                    f" VALUES (?, {', '.join('?' * len(free))})",
-                    (reading_id, *free.values()),
+                    f"INSERT INTO table_readings (reading_id, {', '.join(occupied)})"
+                    f" VALUES (?, {', '.join('?' * len(occupied))})",
+                    (reading_id, *occupied.values()),
                 )
         return reading_id
 
@@ -146,38 +146,45 @@ def get_history(limit=50):
         ).fetchall()
 
     rows.reverse()  # newest-first from SQL -> oldest-first for the chart
+    
     return [{"taken_at": t, "availability_percent": p} for t, p in rows]
 
 
 def get_latest_tables():
+    
     """The newest table reading, taken from table_readings, for the cards.
 
     Returns {"taken_at": ..., "availability_percent": ...,
-             "tables": [{"table": 1, "free": 2}, {"table": 2, "free": 4}, ...]}
+             "tables": [{"table": 1, "occupied ": 2}, {"table": 2, "occupied ": 4}, ...]}
     or None if no table readings are stored yet.
-    Only the number of FREE SEATS of each table is returned (the only thing
+    Only the number of occupied  SEATS of each table is returned (the only thing
     table_readings stores). Readings saved without table details are skipped.
     """
     init_db()
+    # conn = sqlite3.connect("data/seats.db", timeout=10)
     with _connect() as db:
         row = db.execute(
             f"SELECT r.taken_at, r.availability_percent,"
             f" {', '.join('t.' + c for c in TABLE_COLUMNS)}"
             " FROM table_readings t JOIN readings r ON r.id = t.reading_id"
-            " ORDER BY r.taken_at DESC, t.reading_id DESC LIMIT 1"
+            " ORDER BY t.reading_id DESC LIMIT 1"
         ).fetchone()
     if row is None:
-        return None
+        return [0]*NUM_TABLES
 
-    taken_at, percent, *free_seats = row
-    return {
+    taken_at, percent, *occupied_seat = row
+    data={
         "taken_at": taken_at,
         "availability_percent": percent,
-        "tables": [{"table": number, "free": free}
-                   for number, free in enumerate(free_seats, start=1)
-                   if free is not None],
+        "tables": [{"table": number, "occupied_seat": occupied }
+                   for number, occupied  in enumerate(occupied_seat, start=1)
+                   if occupied  is not None],
     }
-
+    table_values = [t['occupied_seat'] for t in data['tables']]
+    return table_values
+    
+    
+    
 
 def predict_availability(date_time):
     """Planner: expected availability at a future date and time.
@@ -233,13 +240,13 @@ def seed_demo():
             for minute in (0, 30):
                 tables = []
                 for number in range(1, NUM_TABLES + 1):
-                    free = round(SEATS_PER_TABLE * (1 - busy) + rng.gauss(0, 1))
-                    free = max(0, min(SEATS_PER_TABLE, free))
+                    occupied  = round(SEATS_PER_TABLE * (1 - busy) + rng.gauss(0, 1))
+                    occupied  = max(0, min(SEATS_PER_TABLE, occupied ))
                     tables.append({"table": number,
-                                   "people": SEATS_PER_TABLE - free,
-                                   "seats": SEATS_PER_TABLE, "free": free})
-                total_free = sum(t["free"] for t in tables)
-                percent = total_free / (NUM_TABLES * SEATS_PER_TABLE) * 100
+                                   "people": SEATS_PER_TABLE - occupied ,
+                                   "seats": SEATS_PER_TABLE, "occupied ": occupied })
+                total_occupied  = sum(t["occupied "] for t in tables)
+                percent = total_occupied  / (NUM_TABLES * SEATS_PER_TABLE) * 100
                 save_reading(percent, tables=tables,
                              taken_at=day.replace(hour=hour, minute=minute))
 
