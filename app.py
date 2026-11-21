@@ -1,7 +1,6 @@
-
-
 import base64
 import io
+import os
 import re
 import time
 from collections import Counter
@@ -13,9 +12,9 @@ import pandas as pd
 import streamlit as st
 
 try:
-    import smartseat_db
+    import db
 except ImportError:
-    smartseat_db = None
+    db = None
 
 # ==========================================
 # PAGE SETUP
@@ -47,11 +46,23 @@ CAMERA_CONNECTED = False
 DETECTION_STATUS = "Awaiting integration"
 LAST_DETECTION_UPDATE = None    # a datetime once real data is loaded
 
+# db.py does not store WHERE a reading came from, so say it here.
+#   "demo"   = invented rows from `python db.py --seed-demo`
+#   "replay" = readings from recorded images
+#   "live"   = the detection process is writing fresh readings from a camera
+# Change it in this file or with the environment variable SMARTSEAT_SOURCE.
+DB_DATA_SOURCE = os.environ.get("SMARTSEAT_SOURCE", "replay").strip().lower()
+if DB_DATA_SOURCE not in ("demo", "replay", "live"):
+    DB_DATA_SOURCE = "replay"
+
 # Live data older than this many seconds is shown as STALE.
 STALE_AFTER_SECONDS = 120
 
-# Find Available Seats looks this many minutes either side of the time.
-AVAILABILITY_WINDOW_MINUTES = 15
+# Find Available Seats: the time window is set in db.py (WINDOW_MINUTES).
+AVAILABILITY_WINDOW_MINUTES = getattr(db, "WINDOW_MINUTES", 60)
+
+# With fewer past readings than this, no forecast number is shown.
+MIN_FORECAST_READINGS = 3
 
 OPENING_TIME = None
 CLOSING_TIME = None
@@ -197,7 +208,6 @@ else:
 data_problems = []
 
 
-
 def to_local_naive(value):
 
     if value is None:
@@ -226,91 +236,143 @@ def canonical_table_name(name):
     return f"Table {int(match.group(1)):02d}"
 
 
-def load_latest_snapshot():
+# ==========================================
+# DATABASE ACCESS (db.py)
+# ==========================================
 
-    if smartseat_db is None:
+def load_latest_snapshot():
+    """Newest table reading from db.get_latest_tables().
+
+    db.py stores only the FREE seats of each table, so the number of
+    people is worked out here: people = seats per table - free seats.
+    Returns {"counts": {"Table 01": people, ...}, "timestamp": ...,
+    "source": ...} or None.
+    """
+
+    if db is None:
         return None
 
-    reader = getattr(smartseat_db, "latest_snapshot", None)
+    reader = getattr(db, "get_latest_tables", None)
 
     if reader is None:
         data_problems.append(
-            "smartseat_db has no latest_snapshot() function, "
+            "db.py has no get_latest_tables() function, "
             "so sample data is shown."
         )
         return None
 
     try:
-        return reader()
+        latest = reader()
     except Exception as error:
         data_problems.append(f"Could not read the latest snapshot: {error}")
         return None
 
+    if not latest or not latest.get("tables"):
+        return None
+
+    seats = getattr(db, "SEATS_PER_TABLE", 4)
+    counts = {}
+
+    for entry in latest["tables"]:
+        try:
+            name = f"Table {int(entry['table']):02d}"
+            counts[name] = max(0, seats - int(entry["free"]))
+        except (KeyError, TypeError, ValueError):
+            data_problems.append(
+                f"Skipped an unreadable table entry: {entry}"
+            )
+
+    if not counts:
+        return None
+
+    return {
+        "counts": counts,
+        "timestamp": latest.get("taken_at"),
+        "source": DB_DATA_SOURCE,
+    }
+
 
 def load_history():
+    """History for the trend chart, from db.get_history().
 
-    if smartseat_db is None:
+    db.py stores the room's free-seat percentage, so people detected is
+    worked out from it: capacity x (1 - free share).
+    Returns (rows, problem_text_or_None), oldest first.
+    """
+
+    if db is None:
         return [], None
 
-    reader = getattr(smartseat_db, "history_totals", None)
+    reader = getattr(db, "get_history", None)
 
     if reader is None:
-        return [], "smartseat_db has no history_totals() function."
+        return [], "db.py has no get_history() function."
 
     try:
-        return list(reader()), None
+        rows = reader(limit=500)
     except Exception as error:
         return [], f"Could not read the history: {error}"
 
+    total_seats = sum(TABLE_CAPACITY.values())
 
-def load_availability(weekday, visit_time, seats_needed):
-    
-    function = (
-        getattr(smartseat_db, "predict_availability", None)
-        if smartseat_db is not None else None
-    )
+    history = []
+    for row in rows:
+        try:
+            free_share = float(row["availability_percent"]) / 100
+            history.append({
+                "time": row["taken_at"],
+                "source": DB_DATA_SOURCE,
+                "people_detected": round(total_seats * (1 - free_share)),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    return history, None
+
+
+def load_availability(visit_moment):
+    """Forecast from db.predict_availability(date_time).
+
+    db.py returns (average free-seat percent, number of readings).
+    This always returns a dictionary with a "status":
+    ok, not_enough_data, not_connected or error.
+    "free_share" is between 0 and 1.
+    """
+
+    function = getattr(db, "predict_availability", None) if db else None
 
     if function is None:
         return {"status": "not_connected"}
 
     try:
-        raw = function(
-            weekday, visit_time, seats_needed, AVAILABILITY_WINDOW_MINUTES
-        )
+        average, samples = function(visit_moment)
     except Exception as error:
         return {"status": "error", "message": str(error)}
 
-    if isinstance(raw, dict):
-        probability = raw.get("probability")
-        details = {
-            "readings_used": raw.get("readings_used"),
-            "days_covered": raw.get("days_covered"),
-            "source": raw.get("source"),
-        }
-    else:
-        probability = raw
-        details = {
-            "readings_used": None, "days_covered": None, "source": None
-        }
+    details = {
+        "readings_used": samples,
+        "days_covered": None,
+        "source": DB_DATA_SOURCE,
+    }
 
-    if probability is None:
+    if average is None or samples < MIN_FORECAST_READINGS:
         return {"status": "not_enough_data", **details}
 
     try:
-        probability = float(probability)
+        average = float(average)
     except (TypeError, ValueError):
         return {
             "status": "error",
             "message": "The forecast function did not return a number."
         }
 
-    if not 0 <= probability <= 1:
+    if not 0 <= average <= 100:
         return {
             "status": "error",
-            "message": "The probability must be between 0 and 1."
+            "message": "The availability must be between 0 and 100."
         }
 
-    return {"status": "ok", "probability": probability, **details}
+    return {"status": "ok", "free_share": average / 100, **details}
 
 
 # ==========================================
@@ -366,14 +428,15 @@ if snapshot:
                 data_problems.append(f"Invalid count for {name}, shown as 0.")
 
         DATA_SOURCE = snapshot.get("source", "replay")
-        if DATA_SOURCE not in DATA_SOURCE_TEXT or DATA_SOURCE == "demo":
+        if DATA_SOURCE not in DATA_SOURCE_TEXT:
             DATA_SOURCE = "replay"
 
         LAST_DETECTION_UPDATE = to_local_naive(snapshot.get("timestamp"))
-        DETECTION_STATUS = (
-            "Running" if DATA_SOURCE == "live"
-            else "Replay of recorded images"
-        )
+        DETECTION_STATUS = {
+            "live": "Running",
+            "replay": "Replay of recorded images",
+            "demo": "Demonstration data",
+        }[DATA_SOURCE]
 
 if not use_snapshot:
     table_data = dict(st.session_state.table_data)
@@ -749,7 +812,7 @@ def forecast_message_card(badge_text, title, message, kind="off"):
     """)
 
 
-def display_visit_forecast(visit_date, visit_time, seats_needed):
+def display_visit_forecast(visit_date, visit_time):
     """Check the request, ask the database, and draw the right card."""
 
     visit_moment = datetime.combine(visit_date, visit_time)
@@ -775,16 +838,14 @@ def display_visit_forecast(visit_date, visit_time, seats_needed):
         return
 
     # 2. Ask the database.
-    forecast = load_availability(
-        visit_date.weekday(), visit_time, seats_needed
-    )
+    forecast = load_availability(visit_moment)
     status = forecast["status"]
 
     if status == "not_connected":
         forecast_message_card(
             "NOT CONNECTED", "Availability data is not connected yet",
-            "The database forecast function is not connected, so no "
-            "number is shown."
+            "db.py or its predict_availability() function was not found, "
+            "so no number is shown."
         )
         return
 
@@ -805,7 +866,7 @@ def display_visit_forecast(visit_date, visit_time, seats_needed):
         forecast_message_card(
             "NO FORECAST", "Not enough history yet",
             f"There are too few past readings for {weekday_name}s around "
-            f"{visit_time:%H:%M} to estimate {seats_needed} seat(s), so "
+            f"{visit_time:%H:%M} to estimate availability, so "
             f"no number is shown.{extra}"
         )
         return
@@ -814,15 +875,19 @@ def display_visit_forecast(visit_date, visit_time, seats_needed):
     window = AVAILABILITY_WINDOW_MINUTES
     start = (visit_moment - timedelta(minutes=window)).strftime("%H:%M")
     end = (visit_moment + timedelta(minutes=window)).strftime("%H:%M")
-    percent = round(forecast["probability"] * 100)
+    percent = round(forecast["free_share"] * 100)
+
+    all_seats = sum(TABLE_CAPACITY.values())
+    expected_free = round(forecast["free_share"] * all_seats)
 
     sources = {
         "live": ("LIVE DATA", "ok"),
         "replay": ("REPLAY DATA", "demo"),
         "demo": ("DEMO DATA", "demo"),
     }
-    source_text, source_kind = sources.get(
-        forecast.get("source"), ("SOURCE NOT STATED", "off")
+    source_html = (
+        status_badge(*sources[forecast["source"]])
+        if forecast.get("source") in sources else ""
     )
 
     based_on = ""
@@ -841,11 +906,10 @@ def display_visit_forecast(visit_date, visit_time, seats_needed):
         <div style="display:flex;justify-content:space-between;
                     align-items:center;">
             <div class="smartseat-panel-title">Estimated availability</div>
-            <div>{status_badge(source_text, source_kind)}</div>
+            <div>{source_html}</div>
         </div>
         <div class="smartseat-panel-text">
-            Estimated chance that at least one table has
-            {seats_needed} free seat(s)
+            Estimated share of seats that are free in the study room
         </div>
         <div style="font-size:64px;font-weight:800;color:{DEEP_GREEN};
                     line-height:1.1;margin:10px 0;">{percent}%</div>
@@ -858,14 +922,16 @@ def display_visit_forecast(visit_date, visit_time, seats_needed):
             <span>{weekday_name}, {visit_date:%d %b %Y}, {visit_time:%H:%M}</span></div>
         <div class="smartseat-row"><span>Time window</span>
             <span>{weekday_name}s, {start} to {end}</span></div>
+        <div class="smartseat-row"><span>Expected free seats</span>
+            <span>about {expected_free} of {all_seats}</span></div>
         {based_on_row}
         <div class="smartseat-panel-text"
              style="background:#faf8f4;border-radius:8px;padding:12px;
                     margin-top:14px;">
             This is an estimate from past patterns, not a reservation or
-            a guarantee. Free seats are counted as rated capacity minus
-            people detected at each table. It does not know about exams,
-            holidays or events.
+            a guarantee. It is the average share of free seats in the whole
+            room, not a promise that seats are free together at one table.
+            It does not know about exams, holidays or events.
         </div>
     </div>
     """)
@@ -920,6 +986,9 @@ with st.sidebar:
         + ("Connected" if CAMERA_CONNECTED else "Not connected")
     )
     st.caption(f"Data mode: {DATA_MODE_TEXT[DATA_SOURCE]}")
+    st.caption(
+        "Database: " + ("Connected" if db is not None else "Not found")
+    )
 
     auto_refresh = st.toggle("Auto-refresh every 10 s", value=False)
 
@@ -1054,8 +1123,8 @@ if page == "Overview":
         ])
 
         st.caption(
-            "Free seats = rated capacity minus people detected. "
-            "It is an estimate, not chair-by-chair detection."
+            "Free seats are read from the database; people detected = "
+            "seats minus free seats. It is not chair-by-chair detection."
         )
 
     with status_column:
@@ -1063,7 +1132,11 @@ if page == "Overview":
         st.markdown("### Detection Status")
 
         display_status_rows("Detection Status", [
-            ("YOLO detection", status_badge(DETECTION_STATUS.upper(), "off")),
+            ("YOLO detection",
+             status_badge(
+                 DETECTION_STATUS.upper(),
+                 "ok" if CAMERA_CONNECTED else "off"
+             )),
             ("Camera connection", camera_badge()),
             ("Data source", source_badge()),
             ("Last detection update", escape(last_update_text())),
@@ -1209,6 +1282,7 @@ elif page == "Analytics":
 
         history_frame = pd.DataFrame(history)
         history_frame["time"] = history_frame["time"].apply(to_local_naive)
+        history_frame = history_frame.dropna(subset=["time"])
 
         st.line_chart(
             history_frame,
@@ -1297,14 +1371,6 @@ elif page == "Find Available Seats":
                 step=900
             )
 
-            seats_needed = st.number_input(
-                "Seats needed (together at one table)",
-                min_value=1,
-                max_value=max(TABLE_CAPACITY.values()),
-                value=1,
-                step=1
-            )
-
             submitted = st.form_submit_button("Check availability")
 
         st.caption(
@@ -1313,9 +1379,7 @@ elif page == "Find Available Seats":
         )
 
     if submitted:
-        st.session_state.seat_request = (
-            visit_date, visit_time, int(seats_needed)
-        )
+        st.session_state.seat_request = (visit_date, visit_time)
 
     with result_column:
 
@@ -1324,16 +1388,18 @@ elif page == "Find Available Seats":
         if request is None:
             display_panel(
                 "Estimated availability",
-                "Choose a date, an arrival time and how many seats you "
-                "need, then select Check availability."
+                "Choose a date and an arrival time, then select "
+                "Check availability."
             )
         else:
-            display_visit_forecast(*request)
+            display_visit_forecast(*request[:2])
 
     st.info(
         "The estimate uses past occupancy readings stored in the "
-        "database, around the same weekday and time. With too little "
-        "history, no number is shown."
+        "database, on the same weekday and within "
+        f"{AVAILABILITY_WINDOW_MINUTES} minutes of the chosen time. "
+        f"With fewer than {MIN_FORECAST_READINGS} readings, no number "
+        "is shown."
     )
 
     st.caption(
@@ -1379,8 +1445,8 @@ elif page == "About SmartSeat":
     with step2:
         display_panel(
             "03 — Data Storage",
-            "Table-level counts are stored with a timestamp in a SQLite "
-            "database."
+            "The free seats of each table are stored with a timestamp "
+            "in a SQLite database."
         )
         display_panel(
             "04 — Smart Dashboard",
@@ -1425,15 +1491,14 @@ elif page == "About SmartSeat":
         "**Availability forecast:** "
         + (
             "Connected"
-            if smartseat_db is not None
-            and hasattr(smartseat_db, "predict_availability")
+            if db is not None and hasattr(db, "predict_availability")
             else "Not connected"
         )
     )
 
     st.info(
         "SmartSeat is a prototype. Numbers are labelled by source: "
-        "DEMO, REPLAY or LIVE. Only people counts are stored. No "
+        "DEMO, REPLAY or LIVE. Only seat counts are stored. No "
         "images or faces are kept."
     )
 
