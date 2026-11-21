@@ -5,7 +5,9 @@
 SmartSeat counts how many seats are **actually used** in a study room, table by table, from photos of the room. It then shows the result on a live dashboard and **predicts how busy the room will be** at a time the student chooses.
  
 <p align="center">
-  <img src="docs/images/dashboard_overview.png" alt="SmartSeat dashboard: processed room image and table occupancy monitor" width="900">
+<img width="1200" height="896" alt="1" src="https://github.com/user-attachments/assets/8e1708a2-6986-4009-8f5e-6faf2aba5e09" />
+
+
 </p>
 ---
  
@@ -42,28 +44,37 @@ SmartSeat counts how many seats are **actually used** in a study room, table by 
 ## 2. Screenshots
  
 ### Live overview: processed image and table monitor
-<p align="center">
-  <img src="docs/images/dashboard_overview.png" alt="Overview page" width="900">
-</p>
-### Charts: people per table and availability history
-<p align="center">
-  <img src="docs/images/dashboard_charts.png" alt="People per table and availability history" width="900">
+<p align="center"><img width="964" height="720" alt="Latest_image" src="https://github.com/user-attachments/assets/306948ec-46ae-4204-abe1-743ae09b123a" />
+<img width="1043" height="716" alt="Screenshot 2026-11-21 174439" src="https://github.com/user-attachments/assets/f2b7e5e5-0efe-4f49-805f-7665f6376dbc" />
+<img width="1081" height="405" alt="Screenshot 2026-11-21 174444" src="https://github.com/user-attachments/assets/0760b5a3-3edf-4b84-b8f6-cb4201dfbdcf" />
+
+
+
+
+  
 </p>
 ### Find Available Seats (planner)
 <p align="center">
-  <img src="docs/images/find_seats.png" alt="Find Available Seats page" width="900">
+  <img width="1600" height="774" alt="WhatsApp Image 2026-11-21 at 5 32 05 PM" src="https://github.com/user-attachments/assets/31e45906-7441-479f-bf4f-12f98737a80c" />
+
 </p>
 ### Input photo and processed result
  
 | Input (from `images/`) | Output (`output/Latest_image.jpg`) |
 |---|---|
-| <img src="docs/images/input_sample.jpg" alt="Input photo" width="420"> | <img src="docs/images/processed_sample.jpg" alt="Processed photo" width="420"> |
+| <img width="1200" height="896" alt="1" src="https://github.com/user-attachments/assets/99a48cca-75e3-41bc-9cd9-f658fcb973d3" />
+ | <img width="1106" height="579" alt="WhatsApp Image 2026-11-21 at 5 37 49 PM" src="https://github.com/user-attachments/assets/56e24ec6-959a-46df-bf48-b8de00b62025" />
+<img width="964" height="720" alt="Latest_image" src="https://github.com/user-attachments/assets/93a9febf-b011-449b-9eef-210705a3fb9e" />
+ |
  
 ### Database views
  
 | `readings` table | `table_readings` table |
 |---|---|
-| <img src="docs/images/db_readings.png" alt="readings table" width="420"> | <img src="docs/images/db_table_readings.png" alt="table_readings table" width="420"> |
+| 
+<img width="1243" height="550" alt="WhatsApp Image 2026-11-21 at 5 37 23 PM" src="https://github.com/user-attachments/assets/ac4005ee-1985-4268-ae08-9ed69c78699c" />
+![Uploading WhatsApp Image 2026-11-21 at 5.37.49 PM.jpeg…]()
+
  
 ---
  
