@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 PROCESS_SCRIPT = "processing.py"   # your YOLO / OpenCV file
-DASHBOARD = "app.py"         # the Streamlit file
+DASHBOARD = "smartseat_app.py"         # the Streamlit file
 OUTPUT_DIR = Path("output")          # your output folder
 IMAGES_DIR = Path("images")          # your images folder
 DELAY_SECONDS = 1                    # pause between two images
