@@ -31,30 +31,20 @@ results = model.predict(
     augment=True,    # test-time augmentation
 )
 tables_dimensions = [
-    (76, 41, 258, 271),
-    (508, 44, 297, 254),
-    (76, 323, 237, 254),
-    (429, 312, 300, 271),
-    (792, 330, 246, 268),
-    (66, 612, 258, 271),
-    (429, 612, 258, 271),
-    (792, 612, 258, 271),
+    (76, 41, 258, 252),
+    (508, 41, 297, 252),
+    (76, 324, 237, 252),
+    (429, 324, 292, 252),
+    (792, 323, 241, 254),
+    (66, 614, 258, 271),
+    (429, 610, 258, 271),
+    (792, 610, 258, 271),
 ]
 
 table_count = {i: 0 for i in range(1, 9)}   
 # drawing_rectangles
-idx=0
-print("table_count:", table_count)
-for table in tables_dimensions:
-    idx += 1
-    X, Y, W, H = table             
-    if table_count[idx] == 0:
-        the_color = (0, 255, 0)
-    elif table_count[idx] == 4:
-        the_color = (0, 0, 255)
-    else:
-        the_color = (0, 255, 255)
-    cv2.rectangle(img, (X, Y), (X + W, Y + H), the_color, 3)
+
+
             
         
         
@@ -80,6 +70,18 @@ for box in results[0].boxes:
 # cv2.rectangle(img, (X, Y), (X + W, Y + H), (0, 0, 255), 3)
 
 
+idx=0
+# print("table_count:", table_count)
+for table in tables_dimensions:
+    idx += 1
+    X, Y, W, H = table             
+    if table_count[idx] == 0:
+        the_color = (20, 255, 57)
+    elif table_count[idx] == 4:
+        the_color = (49, 49, 255)
+    else:
+        the_color = (70, 140, 255)
+    cv2.rectangle(img, (X, Y), (X + W, Y + H), the_color, 3)
 # 1. Calculate the four chair positions for every table
 chairs = []
 
